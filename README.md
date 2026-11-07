@@ -77,7 +77,8 @@ below.
   the first to open holds it for the process. After a `'gpu'` context on a
   Vulkan GPU, `'software'` throws `OXGL_CONTEXT_CREATION_FAILED`. After a
   `'software'` context, `'gpu'` throws `OXGL_GPU_UNAVAILABLE` and `'auto'` uses
-  SwiftShader. Both messages name the backend in use. On a GPU that uses the
+  SwiftShader, or throws too with `OXGL_GPU_BACKEND=vulkan`. Both messages name
+  the backend in use. On a GPU that uses the
   OpenGL ES backend, such as a Raspberry Pi 5, a process can use both if its
   first `'gpu'` context comes before SwiftShader. Other platforms are unaffected: their GPU backend is
   Metal or Direct3D 11. To use both on Linux, create the
@@ -311,6 +312,11 @@ the backend needs `libEGL.so.1`, and `'auto'` uses SwiftShader. The user needs a
 membership of the `render` group); otherwise Mesa falls back to llvmpipe, which
 is refused the same way.
 
+That automatic choice needs the GPU's Vulkan driver (`mesa-vulkan-drivers` on a
+Raspberry Pi 5), since oxgl learns from it that Vulkan offers only OpenGL ES
+2.0. To use the OpenGL ES backend without a Vulkan driver installed, set
+`OXGL_GPU_BACKEND=gles`.
+
 A CPU driver (SwiftShader, llvmpipe, lavapipe, softpipe, WARP) never counts as a
 GPU. If a GPU backend fails to initialize, it is not retried until the process
 restarts. A failure to create one GPU context, such as running out of GPU
@@ -320,6 +326,17 @@ The `OXGL_BACKEND` environment variable (`auto`, `gpu`, or `software`)
 overrides the `backend` option. It is read from the calling thread's
 `process.env` on every `createContext` call, so a worker can set its own. An
 empty value is ignored.
+
+On Linux, the `OXGL_GPU_BACKEND` environment variable names the GPU backend
+for `'gpu'` and `'auto'`. With `gles`, they use only the OpenGL ES backend on
+the system's EGL driver and open no Vulkan GPU, so no Vulkan driver is needed,
+and a process can also use SwiftShader. With `vulkan`, they use only Vulkan and
+never load the system's EGL driver. Either way, `'auto'` no longer falls back
+to SwiftShader: when the named backend fails or renders on a CPU, it throws
+`OXGL_GPU_UNAVAILABLE` like `'gpu'`. `'software'` still uses SwiftShader. Unset
+or empty keeps the automatic choice. It is read per call like `OXGL_BACKEND`,
+and a context restored after a loss keeps the backend it was created with. It
+has no effect on macOS or Windows, though an invalid value throws there too.
 
 ### Extensions
 
@@ -357,8 +374,8 @@ Invalid options throw a `TypeError` or `RangeError`. Other failures throw an
 
 | `code` | Cause |
 |---|---|
-| `OXGL_GPU_UNAVAILABLE` | `backend: 'gpu'` (option or `OXGL_BACKEND`) could not create a context, including when the only driver renders on a CPU; the message names each GPU backend tried and why it failed, with the refused renderer |
-| `OXGL_INVALID_BACKEND` | `OXGL_BACKEND` has a value other than `auto`, `gpu`, `software`, or empty |
+| `OXGL_GPU_UNAVAILABLE` | `backend: 'gpu'` (option or `OXGL_BACKEND`), or `'auto'` with `OXGL_GPU_BACKEND` set on Linux, could not create a context, including when the only driver renders on a CPU; the message names each GPU backend tried and why it failed, with the refused renderer |
+| `OXGL_INVALID_BACKEND` | `OXGL_BACKEND` has a value other than `auto`, `gpu`, `software`, or empty, or `OXGL_GPU_BACKEND` one other than `vulkan`, `gles`, or empty |
 | `OXGL_CONTEXT_CREATION_FAILED` | no backend could create the context, for example WebGL 2 on a backend without OpenGL ES 3.0, or `failIfMajorPerformanceCaveat` with the software backend |
 | `OXGL_NATIVE_MISSING` | the native addon or its ANGLE libraries are missing or failed to load |
 | `OXGL_CONTEXT_LOST` | `encodePNG` was given a lost or destroyed context (the promise rejects) |

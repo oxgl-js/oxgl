@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { createContext, WebGLContextEvent } from '@oxgl-js/oxgl';
 
 import { program, quad, color } from './gl-helpers.mjs';
-import { allPixels, readAll } from './helpers.mjs';
+import { allPixels, readAll, withEnv } from './helpers.mjs';
 
 test('lost event after loseContext', async () => {
   const gl = createContext({ width: 1, height: 1 });
@@ -119,3 +119,34 @@ test('destroy fires no lost event', async () => {
   await delay(0);
   assert.equal(fired, false);
 });
+
+test(
+  'restore keeps the GPU display it was created on',
+  {
+    skip:
+      process.platform !== 'linux'
+        ? 'only Linux acts on OXGL_GPU_BACKEND'
+        : process.env.OXGL_BACKEND && `OXGL_BACKEND=${process.env.OXGL_BACKEND} forces a backend`,
+    // A failed restore leaves the context lost and fires no restored event.
+    timeout: 30_000,
+  },
+  async () => {
+    // Created with the automatic choice; a restore that re-read OXGL_GPU_BACKEND
+    // would request the OpenGL ES backend, which this host can't serve unless it
+    // has a GPU behind Mesa's EGL.
+    const gl = withEnv('OXGL_GPU_BACKEND', undefined, () => createContext({ width: 1, height: 1 }));
+    const info = gl.getExtension('WEBGL_debug_renderer_info');
+    const renderer = gl.getParameter(info.UNMASKED_RENDERER_WEBGL);
+    const lose = gl.getExtension('WEBGL_lose_context');
+    gl.canvas.addEventListener('webglcontextlost', (event) => event.preventDefault());
+    await withEnv('OXGL_GPU_BACKEND', 'gles', async () => {
+      lose.loseContext();
+      await once(gl.canvas, 'webglcontextlost');
+      lose.restoreContext();
+      await once(gl.canvas, 'webglcontextrestored');
+    });
+    assert.equal(gl.isContextLost(), false);
+    assert.equal(gl.getParameter(gl.getExtension('WEBGL_debug_renderer_info').UNMASKED_RENDERER_WEBGL), renderer);
+    gl.destroy();
+  },
+);

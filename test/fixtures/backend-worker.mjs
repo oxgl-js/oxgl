@@ -1,10 +1,11 @@
-// Worker for backend-selection.test.mjs: sets OXGL_BACKEND in the worker's own
-// process.env copy and reports what createContext does.
+// Worker for backend-selection.test.mjs: sets OXGL_BACKEND (or the variable
+// `workerData.variable` names) in the worker's own process.env copy and reports
+// what createContext does.
 import { parentPort, workerData } from 'node:worker_threads';
 
 import { createContext } from '@oxgl-js/oxgl';
 
-process.env.OXGL_BACKEND = workerData.override;
+process.env[workerData.variable ?? 'OXGL_BACKEND'] = workerData.override;
 try {
   const gl = createContext({ width: 4, height: 4, backend: 'gpu' });
   gl.clearColor(0, 1, 0, 1);

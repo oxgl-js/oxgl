@@ -53,17 +53,33 @@ export function countNativeCalls(names) {
   };
 }
 
+/**
+ * Runs `fn` with the environment variable `name` set to `value` (or unset), then restores it:
+ * once `fn` returns or, when it returns a promise, once that settles.
+ */
+export function withEnv(name, value, fn) {
+  const saved = process.env[name];
+  const restore = () => {
+    if (saved === undefined) delete process.env[name];
+    else process.env[name] = saved;
+  };
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+  let result;
+  try {
+    result = fn();
+  } catch (error) {
+    restore();
+    throw error;
+  }
+  if (typeof result?.then === 'function') return Promise.resolve(result).finally(restore);
+  restore();
+  return result;
+}
+
 /** Runs `fn` with `OXGL_BACKEND` set to `value` (or unset), then restores it. */
 export function withBackendEnv(value, fn) {
-  const saved = process.env.OXGL_BACKEND;
-  if (value === undefined) delete process.env.OXGL_BACKEND;
-  else process.env.OXGL_BACKEND = value;
-  try {
-    return fn();
-  } finally {
-    if (saved === undefined) delete process.env.OXGL_BACKEND;
-    else process.env.OXGL_BACKEND = saved;
-  }
+  return withEnv('OXGL_BACKEND', value, fn);
 }
 
 /**

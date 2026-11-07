@@ -932,6 +932,7 @@ mod tests {
             height: 8.0,
             webgl2,
             attributes,
+            gpu: crate::backend::GpuDisplay::Auto,
         }
     }
 

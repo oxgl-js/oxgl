@@ -890,6 +890,7 @@ function restore(s: ContextState): void {
   const { width, height } = canvas as Partial<Record<'width' | 'height', unknown>>;
   const created = native.createContext(
     creation.backend,
+    creation.gpuBackend,
     canvasSize(width, creation.width),
     canvasSize(height, creation.height),
     s.webgl2,
@@ -968,6 +969,8 @@ interface CreatedContext {
 interface Creation {
   /** A `ContextBackend`, or a test-only value such as `gles`, which a restore requests again. */
   readonly backend: string;
+  /** The `OXGL_GPU_BACKEND` value it was created with, which a restore requests again. */
+  readonly gpuBackend: string;
   readonly attributes: NativeAttributes;
   /** The size first requested, used on restore when the canvas has none. */
   readonly width: number;
@@ -3441,6 +3444,25 @@ function resolveBackend(option: ContextBackend): string {
   return override;
 }
 
+/** `OXGL_GPU_BACKEND` values: the Linux GPU display for GPU requests. */
+const GPU_BACKENDS: readonly string[] = ['vulkan', 'gles'];
+
+/**
+ * `OXGL_GPU_BACKEND`, read from this thread's `process.env` on every call and validated on every
+ * platform: `vulkan`, `gles`, or empty for the automatic choice. Only Linux acts on it.
+ */
+function resolveGpuBackend(): string {
+  const value = process.env.OXGL_GPU_BACKEND;
+  if (value === undefined || value === '') return '';
+  if (!GPU_BACKENDS.includes(value)) {
+    throw codedError(
+      'OXGL_INVALID_BACKEND',
+      `oxgl: OXGL_GPU_BACKEND is '${value}'; expected 'vulkan', 'gles', or empty`,
+    );
+  }
+  return value;
+}
+
 function validateSize(name: string, value: unknown, method = 'createContext'): number {
   if (typeof value !== 'number') {
     throw new TypeError(`oxgl: ${method}: '${name}' must be a number`);
@@ -3532,6 +3554,7 @@ export function createContext(options: unknown): WebGLRenderingContext | WebGL2R
   }
   const attributes = convertAttributes(rawAttributes);
   let resolved = resolveBackend(backend as ContextBackend);
+  const gpuBackend = resolveGpuBackend();
   if (attributes.failIfMajorPerformanceCaveat && resolved !== 'gles') {
     // SwiftShader is a major performance caveat (WebGL 1.0 §5.2.1).
     if (resolved === 'software') {
@@ -3542,10 +3565,10 @@ export function createContext(options: unknown): WebGLRenderingContext | WebGL2R
     }
     resolved = 'gpu';
   }
-  const created = native.createContext(resolved, width, height, webgl2, attributes);
+  const created = native.createContext(resolved, gpuBackend, width, height, webgl2, attributes);
   if (created.errorCode !== undefined) {
     throw codedError(created.errorCode, created.errorMessage ?? created.errorCode);
   }
   const Class = webgl2 ? WebGL2RenderingContext : WebGLRenderingContext;
-  return new Class(CONSTRUCTING, created, canvas, { backend: resolved, attributes, width, height });
+  return new Class(CONSTRUCTING, created, canvas, { backend: resolved, gpuBackend, attributes, width, height });
 }

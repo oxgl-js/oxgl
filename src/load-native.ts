@@ -71,6 +71,8 @@ export interface NativeBinding {
   init(libDir: string): void;
   createContext(
     backend: string,
+    /** `OXGL_GPU_BACKEND`: `vulkan`, `gles`, or empty for the automatic choice. */
+    gpuBackend: string,
     width: number,
     height: number,
     webgl2: boolean,
@@ -239,7 +241,7 @@ export interface NativeBinding {
 }
 
 /** Version of the JS ↔ native interface this package was built for. */
-export const NATIVE_ABI_VERSION = 15;
+export const NATIVE_ABI_VERSION = 16;
 
 /** An `Error` with `code: 'OXGL_NATIVE_MISSING'` naming the host and `detail`. */
 export function nativeMissing(
