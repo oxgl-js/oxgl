@@ -9,7 +9,7 @@ import { Worker } from 'node:worker_threads';
 
 import { createContext } from '@oxgl-js/oxgl';
 
-import { allPixels, gpuSkipReason, oneVulkanDevice, readAll, withBackendEnv } from './helpers.mjs';
+import { allPixels, gpuSkipReason, oneVulkanDevice, readAll, withBackendEnv, withEnv } from './helpers.mjs';
 
 /** Whether this run uses the test-only OpenGL ES backend (a `test-gles` addon, in CI on llvmpipe). */
 const testGles = process.env.OXGL_BACKEND === 'gles';
@@ -70,9 +70,9 @@ test('invalid override value', () => {
   });
 });
 
-async function runWorker(override) {
+async function runWorker(override, variable = 'OXGL_BACKEND') {
   const worker = new Worker(new URL('./fixtures/backend-worker.mjs', import.meta.url), {
-    workerData: { override },
+    workerData: { override, variable },
   });
   // Listen for both before awaiting either: a worker that posts and exits
   // quickly has its message drained and 'exit' emitted in one synchronous
@@ -89,6 +89,67 @@ test('override set inside a worker', { timeout: 30_000 }, async () => {
   const invalid = await runWorker('vulkan');
   assert.equal(invalid.code, 'OXGL_INVALID_BACKEND');
   assert.notEqual(process.env.OXGL_BACKEND, 'vulkan');
+});
+
+/** Runs `fn` with `OXGL_GPU_BACKEND` set to `value` (or unset), then restores it. */
+function withGpuBackendEnv(value, fn) {
+  return withEnv('OXGL_GPU_BACKEND', value, fn);
+}
+
+function invalidGpuOverride(value) {
+  return (error) =>
+    error.code === 'OXGL_INVALID_BACKEND' && error.message.includes('OXGL_GPU_BACKEND') && error.message.includes(value);
+}
+
+test('invalid GPU override value', () => {
+  withGpuBackendEnv('opengl', () => {
+    for (const backend of ['auto', 'gpu', 'software']) {
+      assert.throws(() => createContext({ width: 4, height: 4, backend }), invalidGpuOverride('opengl'), backend);
+    }
+  });
+});
+
+test('GPU override is read per call', () => {
+  withGpuBackendEnv('opengl', () => {
+    assert.throws(() => createContext({ width: 1, height: 1, backend: 'software' }), invalidGpuOverride('opengl'));
+  });
+  withGpuBackendEnv('', () => renders(createContext({ width: 1, height: 1, backend: 'software' })));
+  withGpuBackendEnv(undefined, () => renders(createContext({ width: 1, height: 1, backend: 'software' })));
+});
+
+test('GPU override set inside a worker', { timeout: 30_000 }, async () => {
+  const invalid = await runWorker('opengl', 'OXGL_GPU_BACKEND');
+  assert.equal(invalid.code, 'OXGL_INVALID_BACKEND');
+  assert.match(invalid.message, /OXGL_GPU_BACKEND/);
+  assert.notEqual(process.env.OXGL_GPU_BACKEND, 'opengl');
+});
+
+test('software request ignores the GPU override', () => {
+  for (const value of ['vulkan', 'gles']) {
+    withGpuBackendEnv(value, () => renders(createContext({ width: 4, height: 4, backend: 'software' })));
+  }
+});
+
+test('GPU override has no effect outside Linux', { skip: process.platform === 'linux' && 'Linux acts on it' }, async () => {
+  const gpu = (await gpuSkipReason()) === undefined;
+  for (const value of ['vulkan', 'gles']) {
+    withGpuBackendEnv(value, () => {
+      renders(createContext({ width: 4, height: 4 }));
+      if (gpu) renders(createContext({ width: 4, height: 4, backend: 'gpu', webgl2: true }));
+    });
+  }
+});
+
+test('test-only OpenGL ES mode takes precedence over the GPU override', { skip: !testGles && 'needs a test-gles build with OXGL_BACKEND=gles' }, () => {
+  withGpuBackendEnv('vulkan', () => {
+    const gl = createContext({ width: 4, height: 4 });
+    const info = gl.getExtension('WEBGL_debug_renderer_info');
+    assert.match(gl.getParameter(info.UNMASKED_RENDERER_WEBGL), /OpenGL ES/);
+    renders(gl);
+  });
+  withGpuBackendEnv('opengl', () => {
+    assert.throws(() => createContext({ width: 4, height: 4 }), invalidGpuOverride('opengl'));
+  });
 });
 
 test('environment untouched', async () => {
@@ -161,6 +222,8 @@ test('a Linux process uses one Vulkan device', { timeout: 60_000 }, async (t) =>
   const reason = await gpuSkipReason();
   if (reason !== undefined) return t.skip(reason);
   if (!oneVulkanDevice) return t.skip('only Linux shares one Vulkan display between the GPU and SwiftShader');
+  // The child processes inherit OXGL_GPU_BACKEND, and this test covers the automatic choice.
+  if (process.env.OXGL_GPU_BACKEND) return t.skip(`OXGL_GPU_BACKEND=${process.env.OXGL_GPU_BACKEND} names a GPU backend`);
   const [first, software] = inChild(contextsScript(['gpu', 'software']));
   if (/Vulkan/.test(first.renderer)) {
     assert.equal(software.code, 'OXGL_CONTEXT_CREATION_FAILED', software.message ?? software.renderer);

@@ -24,8 +24,8 @@ use napi::bindgen_prelude::{Env, Unknown};
 use napi_derive::napi;
 use oxgl_core::parameters::Parameter;
 use oxgl_core::{
-    Attributes, ContextKey, ContextRequest, CoreError, RequestedBackend, Runtime, key_from_parts,
-    key_to_parts,
+    Attributes, ContextKey, ContextRequest, CoreError, GpuDisplay, RequestedBackend, Runtime,
+    key_from_parts, key_to_parts,
 };
 use oxgl_sys::bindings::GL_NO_ERROR;
 use oxgl_sys::napi_view::WriteTarget;
@@ -36,7 +36,7 @@ use oxgl_sys::{ReadPixels, StateCall};
 #[napi]
 #[must_use]
 pub fn native_abi_version() -> u32 {
-    15
+    16
 }
 
 /// Test-only backends this build accepts: `gles` in a Linux build with the
@@ -150,7 +150,8 @@ impl From<Attributes> for ContextAttributes {
 
 /// Creates a context. `backend` is `auto`, `gpu`, `software` or one of
 /// [`test_backends`], already resolved against `OXGL_BACKEND` and validated in
-/// TS.
+/// TS. `gpu_backend` is `OXGL_GPU_BACKEND`, also validated in TS: `vulkan`,
+/// `gles`, or empty for the automatic choice.
 #[napi]
 #[allow(
     clippy::needless_pass_by_value,
@@ -159,6 +160,7 @@ impl From<Attributes> for ContextAttributes {
 pub fn create_context(
     env: Env,
     backend: String,
+    gpu_backend: String,
     width: f64,
     height: f64,
     webgl2: bool,
@@ -176,6 +178,11 @@ pub fn create_context(
         height,
         webgl2,
         attributes: Attributes::from(&attributes),
+        gpu: match gpu_backend.as_str() {
+            "vulkan" => GpuDisplay::Vulkan,
+            "gles" => GpuDisplay::Gles,
+            _ => GpuDisplay::Auto,
+        },
     };
     let created = runtime.create_context(requested, &request).and_then(|key| {
         let buffer = runtime

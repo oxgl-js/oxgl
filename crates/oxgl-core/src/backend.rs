@@ -28,6 +28,20 @@ pub enum RequestedBackend {
     Gles,
 }
 
+/// The Linux GPU display `OXGL_GPU_BACKEND` names for GPU requests. Ignored
+/// on other platforms, which have one GPU display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuDisplay {
+    /// Vulkan, or the OpenGL ES backend when the Vulkan display offers
+    /// OpenGL ES 2.0 only; `'auto'` falls back to `SwiftShader`.
+    Auto,
+    /// Vulkan only, with no fallback.
+    Vulkan,
+    /// ANGLE's OpenGL ES backend only, with no fallback; no Vulkan GPU
+    /// display is opened.
+    Gles,
+}
+
 /// A concrete backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
@@ -50,6 +64,8 @@ pub struct ContextRequest {
     pub webgl2: bool,
     /// The requested context attributes.
     pub attributes: crate::drawing_buffer::Attributes,
+    /// The Linux GPU display for a GPU request.
+    pub gpu: GpuDisplay,
 }
 
 /// Renderer names of CPU implementations, which never count as a GPU.
@@ -234,19 +250,33 @@ impl<P: BackendProbe> Backends<P> {
         Ok(opened)
     }
 
-    /// Creates a context on a GPU backend: the platform's, or on Linux, when
-    /// the Vulkan display offers OpenGL ES 2.0 only, the OpenGL ES backend. A
-    /// context-creation failure fails only this call: it can come from normal
-    /// use (out of GPU memory), unlike a display failure. The error names
-    /// each backend tried.
+    /// Whether the request names a Linux GPU display, so `'auto'` must not
+    /// fall back to `SwiftShader`.
+    fn explicit_gpu(&self, request: &ContextRequest) -> bool {
+        self.vulkan_gpu && request.gpu != GpuDisplay::Auto
+    }
+
+    /// Creates a context on a GPU backend: the platform's, or on Linux, the
+    /// one `request.gpu` names, or when it names none and the Vulkan display
+    /// offers OpenGL ES 2.0 only, the OpenGL ES backend. A context-creation
+    /// failure fails only this call: it can come from normal use (out of GPU
+    /// memory), unlike a display failure. The error names each backend tried.
     fn try_gpu(&mut self, request: &ContextRequest) -> Result<(Backend, P::Context), String> {
+        if self.vulkan_gpu && request.gpu == GpuDisplay::Gles {
+            return self
+                .gles_gpu_display()
+                .and_then(|gles| self.probe.create_context(&gles.display, request))
+                .map(|context| (Backend::Gles, context))
+                .map_err(|cause| format!("OpenGL ES: {cause}"));
+        }
+        let divert = !self.explicit_gpu(request);
         match self.opened(Backend::Gpu) {
             Ok(gpu) => self
                 .probe
                 .create_context(&gpu.display, request)
                 .map(|context| (Backend::Gpu, context))
                 .map_err(|cause| format!("{}: {cause}", gpu_name())),
-            Err(cause) if cause == OPENGL_ES_2_ONLY => {
+            Err(cause) if divert && cause == OPENGL_ES_2_ONLY => {
                 let tried = format!("{}: {cause}; OpenGL ES", gpu_name());
                 let gles = self
                     .gles_gpu_display()
@@ -278,7 +308,8 @@ impl<P: BackendProbe> Backends<P> {
     ///
     /// # Errors
     ///
-    /// [`CoreError::GpuUnavailable`] when `Gpu` was requested and failed;
+    /// [`CoreError::GpuUnavailable`] when `Gpu` was requested and failed, or
+    /// `Auto` with a Linux GPU display named in `request.gpu`;
     /// [`CoreError::ContextCreationFailed`] when every candidate failed.
     pub fn create(
         &mut self,
@@ -292,6 +323,7 @@ impl<P: BackendProbe> Backends<P> {
                 .map_err(CoreError::ContextCreationFailed),
             RequestedBackend::Auto => match self.try_gpu(request) {
                 Ok(created) => Ok(created),
+                Err(gpu) if self.explicit_gpu(request) => Err(CoreError::GpuUnavailable(gpu)),
                 Err(gpu) => self
                     .try_on(Backend::Software, "SwiftShader", request)
                     .map_err(|software| {
@@ -514,6 +546,7 @@ mod tests {
         height: 4.0,
         webgl2: false,
         attributes: crate::drawing_buffer::Attributes::DEFAULT,
+        gpu: GpuDisplay::Auto,
     };
 
     const WEBGL2: ContextRequest = ContextRequest {
@@ -1012,6 +1045,129 @@ mod tests {
                 .to_string();
             assert!(!message.contains("in use"), "{message}");
             assert!(message.contains(cause), "{message}");
+        }
+    }
+    /// `request` with `gpu` naming a Linux GPU display.
+    const fn naming(gpu: GpuDisplay, request: ContextRequest) -> ContextRequest {
+        ContextRequest { gpu, ..request }
+    }
+
+    #[test]
+    fn named_gles_never_opens_the_vulkan_gpu() {
+        for requested in [RequestedBackend::Gpu, RequestedBackend::Auto] {
+            for request in [REQUEST, WEBGL2] {
+                let mut backends = linux(FakeProbe::es2_only_vulkan());
+                let request = naming(GpuDisplay::Gles, request);
+                let (backend, _) = backends.create(requested, &request).unwrap();
+                assert_eq!(backend, Backend::Gles, "{requested:?}");
+                assert_eq!(backends.probe().count("open Gpu"), 0);
+                let (backend, _) = backends
+                    .create(RequestedBackend::Software, &request)
+                    .unwrap();
+                assert_eq!(backend, Backend::Software);
+            }
+        }
+    }
+
+    #[test]
+    fn named_gles_failure_does_not_fall_back() {
+        let cpu = "ANGLE (Mesa, llvmpipe (LLVM 19.1.7 128 bits), OpenGL ES 3.2)";
+        for probe in [
+            FakeProbe {
+                gles_display: Some(gles_open_error("eglInitialize failed (EGL error 0x3001)")),
+                ..FakeProbe::default()
+            },
+            FakeProbe {
+                gles_renderer: Some(cpu.into()),
+                ..FakeProbe::default()
+            },
+            FakeProbe {
+                gles_context: Some("out of memory".into()),
+                ..FakeProbe::es2_only_vulkan()
+            },
+        ] {
+            let mut backends = linux(probe);
+            let request = naming(GpuDisplay::Gles, WEBGL2);
+            for requested in [RequestedBackend::Gpu, RequestedBackend::Auto] {
+                let error = backends.create(requested, &request).unwrap_err();
+                assert_eq!(error.code(), "OXGL_GPU_UNAVAILABLE", "{requested:?}");
+                let message = error.to_string();
+                assert!(message.contains("unavailable: OpenGL ES: "), "{message}");
+                assert!(!message.contains("Vulkan"), "{message}");
+            }
+            assert_eq!(backends.probe().count("open Software"), 0);
+            assert_eq!(backends.probe().count("open Gpu"), 0);
+        }
+    }
+
+    #[test]
+    fn named_vulkan_with_es3_uses_vulkan() {
+        let mut backends = linux(FakeProbe::working_gpu());
+        let request = naming(GpuDisplay::Vulkan, WEBGL2);
+        let (backend, _) = backends.create(RequestedBackend::Auto, &request).unwrap();
+        assert_eq!(backend, Backend::Gpu);
+        assert_eq!(backends.probe().count("open Gles"), 0);
+    }
+
+    #[test]
+    fn named_vulkan_never_diverts_or_falls_back() {
+        let cpu = FakeProbe {
+            gpu_renderer: Some("ANGLE (Mesa, Vulkan 1.3 (lavapipe))".into()),
+            ..FakeProbe::default()
+        };
+        for (probe, cause) in [
+            (FakeProbe::es2_only_vulkan(), "offers OpenGL ES 2.0 only"),
+            (no_gpu(), "0x3001"),
+            (cpu, "renders on a CPU"),
+        ] {
+            let mut backends = linux(probe);
+            let request = naming(GpuDisplay::Vulkan, WEBGL2);
+            for requested in [RequestedBackend::Gpu, RequestedBackend::Auto] {
+                let error = backends.create(requested, &request).unwrap_err();
+                assert_eq!(error.code(), "OXGL_GPU_UNAVAILABLE", "{requested:?}");
+                let message = error.to_string();
+                assert!(
+                    message.contains(&format!("unavailable: {}: ", gpu_name())),
+                    "{message}"
+                );
+                assert!(message.contains(cause), "{message}");
+            }
+            assert_eq!(backends.probe().count("open Gles"), 0);
+            assert_eq!(backends.probe().count("open Software"), 0);
+        }
+    }
+
+    #[test]
+    fn named_vulkan_refused_after_software_does_not_fall_back() {
+        let mut backends = linux(FakeProbe::working_gpu());
+        let request = naming(GpuDisplay::Vulkan, REQUEST);
+        backends
+            .create(RequestedBackend::Software, &request)
+            .unwrap();
+        let error = backends
+            .create(RequestedBackend::Auto, &request)
+            .unwrap_err();
+        assert_eq!(error.code(), "OXGL_GPU_UNAVAILABLE");
+        assert!(
+            error.to_string().contains("SwiftShader is in use"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn named_gpu_display_is_ignored_elsewhere() {
+        for gpu in [GpuDisplay::Vulkan, GpuDisplay::Gles] {
+            let mut backends = elsewhere(no_gpu());
+            let (backend, _) = backends
+                .create(RequestedBackend::Auto, &naming(gpu, REQUEST))
+                .unwrap();
+            assert_eq!(backend, Backend::Software, "{gpu:?}");
+            let mut backends = elsewhere(FakeProbe::working_gpu());
+            let (backend, _) = backends
+                .create(RequestedBackend::Gpu, &naming(gpu, WEBGL2))
+                .unwrap();
+            assert_eq!(backend, Backend::Gpu, "{gpu:?}");
+            assert_eq!(backends.probe().count("open Gles"), 0);
         }
     }
 }

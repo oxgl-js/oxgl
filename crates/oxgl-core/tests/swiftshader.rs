@@ -331,6 +331,7 @@ fn creation_failure_allocates_nothing() {
                     height: 1.0,
                     webgl2: false,
                     attributes: oxgl_core::Attributes::DEFAULT,
+                    gpu: oxgl_core::GpuDisplay::Auto,
                 },
             )
             .err();

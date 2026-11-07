@@ -17,7 +17,7 @@ pub mod state;
 pub mod textures;
 pub mod webgl2;
 
-pub use backend::{Backend, ContextRequest, RequestedBackend};
+pub use backend::{Backend, ContextRequest, GpuDisplay, RequestedBackend};
 pub use context::Context;
 pub use drawing_buffer::{Attributes, DrawingBuffer};
 pub use error::{CONTEXT_LOST_WEBGL, CoreError};
