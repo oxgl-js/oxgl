@@ -112,7 +112,7 @@ jobs:
         run: |
           go install "github.com/rhysd/actionlint/cmd/actionlint@$ACTIONLINT_VERSION"
           "$(go env GOPATH)/bin/actionlint"
-      - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: zizmor@${{ env.ZIZMOR_VERSION }}
           fallback: none
@@ -298,7 +298,7 @@ jobs:
       - run: npm ci
       # Checksums come from install-action's manifest; with no fallback, a
       # version it does not list fails here instead of downloading unverified.
-      - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-deny@${{ env.CARGO_DENY_VERSION }},cargo-about@${{ env.CARGO_ABOUT_VERSION }}
           fallback: none
